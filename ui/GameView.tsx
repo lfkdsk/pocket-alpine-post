@@ -16,7 +16,7 @@
 // opens the save menu only at a safe point; the fold freezes while it is
 // open. The animated atlases are core vblank playback — zero per-frame JS.
 
-import { batch, createSignal, onMount, Show } from "solid-js";
+import { batch, createMemo, createSignal, onMount, Show } from "solid-js";
 import { Image, Sprite, Text, View, type NodeMirror } from "@pocketjs/framework/components";
 import { createJumpBatch, type JumpBatch } from "@pocketjs/framework/animation";
 import { onFrame } from "@pocketjs/framework/lifecycle";
@@ -161,6 +161,30 @@ export function GameView() {
   const slots = collectSlots(project.maps);
   const slotIndex = new Map(slots.map((s, i) => [s.key, i]));
   const mapsById = new Map(project.maps.map((m) => [m.id, m]));
+  // An NPC whose map is not loaded stands on its authored tile.
+  const slotHome = slots.map((slot) => {
+    const ev = mapsById.get(slot.mapId)!.events!.find((e) => e.id === slot.eventId)!;
+    return { px: ev.x * 16, py: ev.y * 16 };
+  });
+  // Per map, the slot events in authored order with the sprite mode each
+  // page selects, so the per-frame page sync only picks the active page.
+  const slotEvents = new Map(project.maps.map((map) => [
+    map.id,
+    (map.events ?? [])
+      .filter((ev) => slotIndex.has(`${map.id}/${ev.id}`))
+      .map((ev) => ({
+        ev,
+        key: `${map.id}/${ev.id}`,
+        modes: ev.pages.map((page) => {
+          const name = page.sprite;
+          return !name || typeof name !== "string"
+            ? ""
+            : animOf(name)
+              ? `anim:${animOf(name)!.atlas}`
+              : `static:${staticSrcOf(name)}`;
+        }),
+      })),
+  ]));
 
   const [mapId, setMapId] = createSignal(state.mapId);
   const [pose, setPose] = createSignal<WalkPose>(walkPose(state.move.phase));
@@ -185,6 +209,9 @@ export function GameView() {
       : "";
   }
   const [slotMode, setSlotMode] = createSignal<Record<string, string>>(initialMode);
+  // One memo per slot: a page switch on one NPC re-runs that NPC's node
+  // props only, not those of every slot on all five maps.
+  const slotModeOf = new Map(slots.map((s) => [s.key, createMemo(() => slotMode()[s.key] ?? "")]));
   const pointer = connectPointer();
   let pointerRoute: PointerRoute | null = null;
   let pointerMasks: number[] = [];
@@ -234,56 +261,73 @@ export function GameView() {
     jumpBatch = createJumpBatch(entries);
     jumpBatch.set(0, state.move.px);
     jumpBatch.set(1, state.move.py);
-    slots.forEach((slot, i) => {
-      const ev = mapsById.get(slot.mapId)!.events!.find((e) => e.id === slot.eventId)!;
-      jumpBatch!.set(2 + i * 2, ev.x * 16);
-      jumpBatch!.set(3 + i * 2, ev.y * 16);
+    slots.forEach((_, i) => {
+      jumpBatch!.set(2 + i * 2, slotHome[i]!.px);
+      jumpBatch!.set(3 + i * 2, slotHome[i]!.py);
     });
     jumpBatch.commit();
   });
 
-  const npcXY = (st: SessionState, slot: NpcSlot): { px: number; py: number } => {
+  let modesSyncedFor: {
+    mapId: string;
+    switches: object;
+    self: object;
+    items: object;
+    variables: object;
+  } | null = null;
+  let switchesSyncedFrom: object | null = null;
+  // Slot indices per map, for the per-frame NPC position sync.
+  const slotsOnMap = new Map<string, number[]>();
+  slots.forEach((slot, i) => {
+    const list = slotsOnMap.get(slot.mapId);
+    if (list) list.push(i);
+    else slotsOnMap.set(slot.mapId, [i]);
+  });
+
+  const npcXY = (st: SessionState, slot: NpcSlot, i: number): { px: number; py: number } => {
     if (st.mapId === slot.mapId) {
       const ch = st.chars.chars[slot.eventId];
-      if (ch) return { px: ch.px, py: ch.py };
+      if (ch) return ch;
     }
-    const ev = mapsById.get(slot.mapId)!.events!.find((e) => e.id === slot.eventId)!;
-    return { px: ev.x * 16, py: ev.y * 16 };
+    return slotHome[i]!;
   };
 
   function syncSignals(prev: SessionState, force = false): void {
-    const map = mapsById.get(state.mapId)!;
-    let modeChanged = false;
-    const nextMode = { ...slotMode() };
-    for (const ev of map.events ?? []) {
-      const key = `${state.mapId}/${ev.id}`;
-      if (slotIndex.get(key) === undefined) continue;
-      const active = activePage(ev, state.sw, state.mapId);
-      const name = active?.page.sprite;
-      const want = !name || typeof name !== "string"
-        ? ""
-        : animOf(name)
-          ? `anim:${animOf(name)!.atlas}`
-          : `static:${staticSrcOf(name)}`;
-      if (nextMode[key] !== want) {
-        nextMode[key] = want;
-        modeChanged = true;
+    // The engine copies a switch-bank record only when a command writes it,
+    // so records with the identities of the last sync hold the same values:
+    // the active pages, and with them the slot modes, are unchanged.
+    const sw = state.sw;
+    const pagesSettled = !force && modesSyncedFor !== null && modesSyncedFor.mapId === state.mapId &&
+      modesSyncedFor.switches === sw.switches && modesSyncedFor.self === sw.self &&
+      modesSyncedFor.items === sw.items && modesSyncedFor.variables === sw.variables;
+    let nextMode: Record<string, string> | null = null;
+    if (!pagesSettled) {
+      const shownMode = slotMode();
+      for (const { ev, key, modes } of slotEvents.get(state.mapId)!) {
+        const index = activePage(ev, sw, state.mapId)?.index;
+        const want = index !== undefined ? modes[index]! : "";
+        if ((nextMode ?? shownMode)[key] !== want) {
+          nextMode ??= { ...shownMode };
+          nextMode[key] = want;
+        }
       }
+      modesSyncedFor = { mapId: state.mapId, switches: sw.switches, self: sw.self, items: sw.items, variables: sw.variables };
     }
-    const swChanged = (() => {
+    const swChanged = sw.switches !== switchesSyncedFrom && (() => {
       const a = switches();
-      const b = state.sw.switches;
+      const b = sw.switches;
       const ak = Object.keys(a);
       const bk = Object.keys(b);
       return ak.length !== bk.length || ak.some((k) => a[k] !== b[k]);
     })();
+    switchesSyncedFrom = sw.switches;
     batch(() => {
       if (force || state.mapId !== prev.mapId || mapId() !== state.mapId) setMapId(state.mapId);
       const nextPose = walkPose(state.move.phase);
       if (force || nextPose !== pose()) setPose(nextPose);
       if (force || state.move.facing !== facing()) setFacing(state.move.facing);
       if (force || state.sw.gold !== gold()) setGold(state.sw.gold);
-      if (modeChanged) setSlotMode(nextMode);
+      if (nextMode) setSlotMode(nextMode);
       const op = fadeOpacity(state.fade);
       if (force || op !== fade()) setFade(op);
       const shownModal = attract.presentedModal();
@@ -315,7 +359,7 @@ export function GameView() {
     jumpBatch?.set(0, state.move.px);
     jumpBatch?.set(1, state.move.py);
     slots.forEach((slot, i) => {
-      const b = npcXY(state, slot);
+      const b = npcXY(state, slot, i);
       jumpBatch?.set(2 + i * 2, b.px);
       jumpBatch?.set(3 + i * 2, b.py);
     });
@@ -625,14 +669,17 @@ export function GameView() {
     let moved = state.move.px !== prev.move.px || state.move.py !== prev.move.py;
     jumpBatch?.set(0, state.move.px);
     jumpBatch?.set(1, state.move.py);
-    for (const slot of slots) {
-      const a = npcXY(prev, slot);
-      const b = npcXY(state, slot);
-      if (a.px === b.px && a.py === b.py) continue;
-      const i = slotIndex.get(slot.key)!;
-      jumpBatch?.set(2 + i * 2, b.px);
-      jumpBatch?.set(3 + i * 2, b.py);
-      moved = true;
+    // Off both the previous and the current map, an NPC stays at home.
+    for (const mapOf of state.mapId === prev.mapId ? [state.mapId] : [prev.mapId, state.mapId]) {
+      for (const i of slotsOnMap.get(mapOf) ?? []) {
+        const slot = slots[i]!;
+        const a = npcXY(prev, slot, i);
+        const b = npcXY(state, slot, i);
+        if (a.px === b.px && a.py === b.py) continue;
+        jumpBatch?.set(2 + i * 2, b.px);
+        jumpBatch?.set(3 + i * 2, b.py);
+        moved = true;
+      }
     }
     if (moved || state.mapId !== prev.mapId || result.status.loopReset || result.status.rewound) jumpBatch?.commit();
     if (state.mapId !== prev.mapId || result.status.rewound || result.status.loopReset) clearPointerRoute();
@@ -643,8 +690,7 @@ export function GameView() {
       d.phase !== result.status.phase ||
       d.demoFrame !== result.status.demoFrame ||
       d.controlNotice !== result.status.controlNotice ||
-      d.rewindNotice !== result.status.rewindNotice ||
-      d.idle !== result.status.idle
+      d.rewindNotice !== result.status.rewindNotice
         ? { ...result.status }
         : d,
     );
@@ -673,15 +719,15 @@ export function GameView() {
   // Reactive per-slot accessors used only as node props, so a page/sprite
   // mode change updates src/display without remounting nodes.
   const modeSrc = (key: string): string => {
-    const mode = slotMode()[key] ?? "";
+    const mode = slotModeOf.get(key)!();
     return mode.startsWith("static:") ? mode.slice(7) : "";
   };
   const modeDisplay = (key: string, kind: "static" | "anim"): number => {
-    const mode = slotMode()[key] ?? "";
+    const mode = slotModeOf.get(key)!();
     return mode.startsWith(kind + ":") ? 0 : 1;
   };
   const animProps = (key: string): { sprite: string; frameStep: number } => {
-    const mode = slotMode()[key] ?? "";
+    const mode = slotModeOf.get(key)!();
     const name = mode.startsWith("anim:") ? mode.slice(5) : "";
     const a = name ? ANIM_ATLASES[name as AnimAtlas] : undefined;
     return { sprite: a ? a.src : "", frameStep: a?.step ?? 1 };
