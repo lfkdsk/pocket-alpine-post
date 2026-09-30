@@ -58,6 +58,7 @@ import {
   type TilePoint,
 } from "../input/pointer.ts";
 import { PlayerSprite } from "./PlayerSprite.tsx";
+import { pageSyncKey, samePageSyncKey, type PageSyncKey } from "./page-sync.ts";
 import { DialogBox } from "../vendor/pocket-rpgkit/src/ui/DialogBox.tsx";
 import { Panel } from "../vendor/pocket-rpgkit/src/ui/Panel.tsx";
 import { SaveMenu, type SlotInfo } from "../vendor/pocket-rpgkit/src/ui/SaveMenu.tsx";
@@ -268,13 +269,10 @@ export function GameView() {
     jumpBatch.commit();
   });
 
-  let modesSyncedFor: {
-    mapId: string;
-    switches: object;
-    self: object;
-    items: object;
-    variables: object;
-  } | null = null;
+  // PageSyncKey: the cache key for the slot-mode recomputation. Its fields
+  // are the SwitchState inputs page selection can read through activePage
+  // (see ui/page-sync.ts for the invariant and its test).
+  let modesSyncedFor: PageSyncKey | null = null;
   let switchesSyncedFrom: object | null = null;
   // Slot indices per map, for the per-frame NPC position sync.
   const slotsOnMap = new Map<string, number[]>();
@@ -284,6 +282,13 @@ export function GameView() {
     else slotsOnMap.set(slot.mapId, [i]);
   });
 
+  // Returns the live CharState object rather than a fresh {px, py}. This is
+  // only sound because of a cross-repo invariant in vendor/pocket-rpgkit:
+  // chars are copy-on-write (ownChar in src/engine/chars.ts copies a shared
+  // CharState before the first write of a frame), so a reference an older
+  // SessionState still holds — prev below, or any rewind/attract snapshot —
+  // is never mutated in place by later frames. If the engine ever stops
+  // guaranteeing that purity, this must go back to allocating a copy.
   const npcXY = (st: SessionState, slot: NpcSlot, i: number): { px: number; py: number } => {
     if (st.mapId === slot.mapId) {
       const ch = st.chars.chars[slot.eventId];
@@ -297,9 +302,8 @@ export function GameView() {
     // so records with the identities of the last sync hold the same values:
     // the active pages, and with them the slot modes, are unchanged.
     const sw = state.sw;
-    const pagesSettled = !force && modesSyncedFor !== null && modesSyncedFor.mapId === state.mapId &&
-      modesSyncedFor.switches === sw.switches && modesSyncedFor.self === sw.self &&
-      modesSyncedFor.items === sw.items && modesSyncedFor.variables === sw.variables;
+    const key = pageSyncKey(state.mapId, sw);
+    const pagesSettled = !force && modesSyncedFor !== null && samePageSyncKey(modesSyncedFor, key);
     let nextMode: Record<string, string> | null = null;
     if (!pagesSettled) {
       const shownMode = slotMode();
@@ -311,7 +315,7 @@ export function GameView() {
           nextMode[key] = want;
         }
       }
-      modesSyncedFor = { mapId: state.mapId, switches: sw.switches, self: sw.self, items: sw.items, variables: sw.variables };
+      modesSyncedFor = key;
     }
     const swChanged = sw.switches !== switchesSyncedFrom && (() => {
       const a = switches();
