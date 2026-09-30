@@ -1,7 +1,7 @@
 # Alpine Post — 《山巅邮路》
 
 A five-map, zero-combat mail-route RPG built on
-[Pocket RPG Kit](https://github.com/lfkdsk/pocket-rpgkit) and
+[Pocket RPG Kit](https://github.com/lfkdsk/pocketjs-rpgkit) and
 [PocketJS](https://github.com/pocket-stack/pocketjs). A relief postmaster
 carries three letters up a rainy mountain before the last cable car stops:
 the east-slope farm, the west-slope mine, the pine trail, and the
