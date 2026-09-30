@@ -10,6 +10,7 @@
 
 import { createChars } from "../vendor/pocket-rpgkit/src/engine/chars.ts";
 import { restoreProblem } from "../vendor/pocket-rpgkit/src/engine/save-restore.ts";
+import { decodeExtension } from "../vendor/pocket-rpgkit/src/engine/extensions.ts";
 import type { Session, SessionState } from "../vendor/pocket-rpgkit/src/engine/session.ts";
 import type { Project } from "../vendor/pocket-rpgkit/src/engine/types.ts";
 import type { SaveSnapshot } from "../vendor/pocket-rpgkit/src/engine/save.ts";
@@ -32,5 +33,11 @@ export function restoreSession(sess: Session, project: Project, snap: SaveSnapsh
     interp: snap.interp,
     fade: null,
     playerRoute: null,
+    // The kit added ext (game-owned JSON) and scene (battle/shop slot) to
+    // SessionState after this helper was written; stepSession folds both
+    // every frame, so a load must populate them exactly like the kit's own
+    // restoreSessionSnapshot does.
+    ext: decodeExtension(sess.extensions, snap.ext),
+    scene: null,
   };
 }
