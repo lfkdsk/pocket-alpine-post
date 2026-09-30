@@ -89,10 +89,13 @@ describe("alpine-post world references", () => {
       }
       function walk(c: Command): void {
         if (c.op === "transfer") {
-          const tm = byId.get(c.map);
-          expect(tm, `transfer to unknown map ${c.map}`).toBeTruthy();
-          const table = tables.get(c.map)!;
-          expect(isStandable(table, c.x, c.y), `bad landing ${c.map}(${c.x},${c.y})`).toBe(true);
+          // Alpine Post authors only literal transfers; the structural gate
+          // does not exercise variable-reference targets.
+          const { map, x, y } = literalTransfer(c);
+          const tm = byId.get(map);
+          expect(tm, `transfer to unknown map ${map}`).toBeTruthy();
+          const table = tables.get(map)!;
+          expect(isStandable(table, x, y), `bad landing ${map}(${x},${y})`).toBe(true);
         }
         if ("commands" in c) for (const sub of (c as { commands: Command[] }).commands) walk(sub);
       }
@@ -170,7 +173,10 @@ describe("alpine-post traversal", () => {
         if (page && page.page.blocks === true) bodies.add(ev.y * m.width + ev.x);
         if (page && page.page.trigger === "playerTouch") {
           const tr = firstTransfer(page.page.commands);
-          if (tr) padTargets.set(`${m.id}:${ev.x},${ev.y}`, { map: tr.map, x: tr.x, y: tr.y });
+          if (tr) {
+            const { map, x, y } = literalTransfer(tr);
+            padTargets.set(`${m.id}:${ev.x},${ev.y}`, { map, x, y });
+          }
         }
       }
       blockingBodies.set(m.id, bodies);
@@ -302,14 +308,24 @@ function firstTransfer(cmds: readonly Command[]): Extract<Command, { op: "transf
   return null;
 }
 
+/** Narrow a transfer to its literal fields. The kit also accepts
+ *  variable-reference targets (TransferMap/TransferCoordinate), but Alpine
+ *  Post authors none; the structural gate throws if that ever changes. */
+function literalTransfer(c: Extract<Command, { op: "transfer" }>): { map: string; x: number; y: number } {
+  if (typeof c.map !== "string" || typeof c.x !== "number" || typeof c.y !== "number") {
+    throw new Error(`variable-reference transfer not authored: ${JSON.stringify(c)}`);
+  }
+  return { map: c.map, x: c.x, y: c.y };
+}
+
 function collectTransfers(): Array<{ from: string; to: string }> {
   const out: Array<{ from: string; to: string }> = [];
   for (const m of maps) {
     for (const ev of m.events ?? []) {
       for (const page of ev.pages) {
         for (const c of page.commands) {
-          if (c.op === "transfer") out.push({ from: m.id, to: c.map });
-          if ("commands" in c) for (const s of (c as { commands: Command[] }).commands) if (s.op === "transfer") out.push({ from: m.id, to: s.map });
+          if (c.op === "transfer") out.push({ from: m.id, to: literalTransfer(c).map });
+          if ("commands" in c) for (const s of (c as { commands: Command[] }).commands) if (s.op === "transfer") out.push({ from: m.id, to: literalTransfer(s).map });
         }
       }
     }

@@ -204,6 +204,9 @@ export function dialogClickAt(modal: Modal | null, point: Point): DialogClick | 
       ? { kind: "confirm" }
       : null;
   }
+  // Shop rows are operated through the kit's menu input, not this dialog
+  // hit-test, so a shop modal has no clickable choice rows here.
+  if (modal.kind !== "choices") return null;
   if (point.x < 220 || point.x >= 468) return null;
   const row = Math.floor((point.y - 104) / 14);
   return row >= 0 && row < modal.options.length ? { kind: "choice", index: row } : null;

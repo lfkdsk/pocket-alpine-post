@@ -26,6 +26,7 @@ import {
 import { canStepFrom, type Dir4 } from "../vendor/pocket-rpgkit/src/engine/passability.ts";
 import { activePage } from "../vendor/pocket-rpgkit/src/engine/interpreter.ts";
 import { searchWalk } from "../vendor/pocket-rpgkit/src/engine/journey-search.ts";
+import type { VariableValue } from "../vendor/pocket-rpgkit/src/engine/types.ts";
 
 const BTN_UP = 0x0010;
 const BTN_RIGHT = 0x0020;
@@ -45,7 +46,7 @@ export interface MilestoneSnapshot {
   y: number;
   switches: Record<string, boolean>;
   items: Record<string, number>;
-  variables: Record<string, number>;
+  variables: Record<string, VariableValue>;
   gold: number;
   rng: number;
 }

@@ -17,6 +17,7 @@ import {
 } from "../vendor/pocket-rpgkit/src/engine/session.ts";
 import { canStepFrom } from "../vendor/pocket-rpgkit/src/engine/passability.ts";
 import type { Dir4 } from "../vendor/pocket-rpgkit/src/engine/passability.ts";
+import type { VariableValue } from "../vendor/pocket-rpgkit/src/engine/types.ts";
 
 const BTN_UP = 0x0010;
 const BTN_RIGHT = 0x0020;
@@ -221,7 +222,7 @@ class Driver {
   get switches(): Record<string, boolean> {
     return { ...this.state.sw.switches };
   }
-  vars(): Record<string, number> {
+  vars(): Record<string, VariableValue> {
     return { ...this.state.sw.variables };
   }
   at(map: string, x: number, y: number): boolean {
